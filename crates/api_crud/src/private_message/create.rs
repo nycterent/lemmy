@@ -5,6 +5,7 @@ use lemmy_api_common::{
   check_person_block,
   get_local_user_view_from_jwt,
   person::{CreatePrivateMessage, PrivateMessageResponse},
+  send_email_to_user,
 };
 use lemmy_apub::{
   generate_local_apub_endpoint,
@@ -19,17 +20,14 @@ use lemmy_db_schema::{
   traits::Crud,
 };
 use lemmy_db_views::local_user_view::LocalUserView;
-use lemmy_utils::{utils::remove_slurs, ApiError, ConnectionId, LemmyError};
-use lemmy_websocket::{
-  send::{send_email_to_user, send_pm_ws_message},
-  LemmyContext,
-  UserOperationCrud,
-};
+use lemmy_utils::{utils::remove_slurs, ConnectionId, LemmyError};
+use lemmy_websocket::{send::send_pm_ws_message, LemmyContext, UserOperationCrud};
 
 #[async_trait::async_trait(?Send)]
 impl PerformCrud for CreatePrivateMessage {
   type Response = PrivateMessageResponse;
 
+  #[tracing::instrument(skip(self, context, websocket_id))]
   async fn perform(
     &self,
     context: &Data<LemmyContext>,
@@ -58,7 +56,7 @@ impl PerformCrud for CreatePrivateMessage {
     {
       Ok(private_message) => private_message,
       Err(e) => {
-        return Err(ApiError::err("couldnt_create_private_message", e).into());
+        return Err(LemmyError::from(e).with_message("couldnt_create_private_message"));
       }
     };
 
@@ -80,7 +78,8 @@ impl PerformCrud for CreatePrivateMessage {
       },
     )
     .await?
-    .map_err(|e| ApiError::err("couldnt_create_private_message", e))?;
+    .map_err(LemmyError::from)
+    .map_err(|e| e.with_message("couldnt_create_private_message"))?;
 
     CreateOrUpdatePrivateMessage::send(
       updated_private_message.into(),

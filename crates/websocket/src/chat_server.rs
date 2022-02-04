@@ -22,13 +22,12 @@ use lemmy_utils::{
   location_info,
   rate_limit::RateLimit,
   settings::structs::Settings,
-  ApiError,
   ConnectionId,
   IpAddr,
   LemmyError,
 };
 use rand::rngs::ThreadRng;
-use reqwest::Client;
+use reqwest_middleware::ClientWithMiddleware;
 use serde::Serialize;
 use serde_json::Value;
 use std::{
@@ -91,7 +90,7 @@ pub struct ChatServer {
   message_handler_crud: MessageHandlerCrudType,
 
   /// An HTTP Client
-  client: Client,
+  client: ClientWithMiddleware,
 
   activity_queue: QueueHandle,
 }
@@ -111,7 +110,7 @@ impl ChatServer {
     rate_limiter: RateLimit,
     message_handler: MessageHandlerType,
     message_handler_crud: MessageHandlerCrudType,
-    client: Client,
+    client: ClientWithMiddleware,
     activity_queue: QueueHandle,
     settings: Settings,
     secret: Secret,
@@ -477,7 +476,7 @@ impl ChatServer {
       let data = &json["data"].to_string();
       let op = &json["op"]
         .as_str()
-        .ok_or_else(|| ApiError::err_plain("missing op"))?;
+        .ok_or_else(|| LemmyError::from_message("missing op"))?;
 
       if let Ok(user_operation_crud) = UserOperationCrud::from_str(op) {
         let fut = (message_handler_crud)(context, msg.id, user_operation_crud.clone(), data);

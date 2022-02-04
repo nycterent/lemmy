@@ -18,7 +18,7 @@ use lemmy_apub_lib::{
   traits::{ActorType, ApubObject},
   values::MediaTypeMarkdown,
 };
-use lemmy_db_schema::source::community::Community;
+use lemmy_db_schema::{source::community::Community, traits::ApubActor};
 use lemmy_db_views_actor::community_follower_view::CommunityFollowerView;
 use lemmy_utils::{
   utils::{convert_datetime, markdown_to_html},
@@ -55,6 +55,7 @@ impl ApubObject for ApubCommunity {
     Some(self.last_refreshed_at)
   }
 
+  #[tracing::instrument(skip_all)]
   async fn read_from_apub_id(
     object_id: Url,
     context: &LemmyContext,
@@ -68,6 +69,7 @@ impl ApubObject for ApubCommunity {
     )
   }
 
+  #[tracing::instrument(skip_all)]
   async fn delete(self, context: &LemmyContext) -> Result<(), LemmyError> {
     blocking(context.pool(), move |conn| {
       Community::update_deleted(conn, self.id, true)
@@ -76,6 +78,7 @@ impl ApubObject for ApubCommunity {
     Ok(())
   }
 
+  #[tracing::instrument(skip_all)]
   async fn into_apub(self, _context: &LemmyContext) -> Result<Group, LemmyError> {
     let source = self.description.clone().map(|bio| Source {
       content: bio,
@@ -100,9 +103,9 @@ impl ApubObject for ApubCommunity {
       inbox: self.inbox_url.clone().into(),
       outbox: ObjectId::new(generate_outbox_url(&self.actor_id)?),
       followers: self.followers_url.clone().into(),
-      endpoints: Endpoints {
-        shared_inbox: self.shared_inbox_url.clone().map(|s| s.into()),
-      },
+      endpoints: self.shared_inbox_url.clone().map(|s| Endpoints {
+        shared_inbox: s.into(),
+      }),
       public_key: self.get_public_key()?,
       published: Some(convert_datetime(self.published)),
       updated: self.updated.map(convert_datetime),
@@ -115,6 +118,7 @@ impl ApubObject for ApubCommunity {
     Ok(Tombstone::new(self.actor_id()))
   }
 
+  #[tracing::instrument(skip_all)]
   async fn verify(
     group: &Group,
     expected_domain: &Url,
@@ -125,6 +129,7 @@ impl ApubObject for ApubCommunity {
   }
 
   /// Converts a `Group` to `Community`, inserts it into the database and updates moderators.
+  #[tracing::instrument(skip_all)]
   async fn from_apub(
     group: Group,
     context: &LemmyContext,
@@ -142,14 +147,14 @@ impl ApubObject for ApubCommunity {
 
     group
       .outbox
-      .dereference(&outbox_data, request_counter)
+      .dereference(&outbox_data, context.client(), request_counter)
       .await
       .map_err(|e| debug!("{}", e))
       .ok();
 
     if let Some(moderators) = &group.moderators {
       moderators
-        .dereference(&outbox_data, request_counter)
+        .dereference(&outbox_data, context.client(), request_counter)
         .await
         .map_err(|e| debug!("{}", e))
         .ok();
@@ -181,6 +186,7 @@ impl ActorType for ApubCommunity {
 
 impl ApubCommunity {
   /// For a given community, returns the inboxes of all followers.
+  #[tracing::instrument(skip_all)]
   pub(crate) async fn get_follower_inboxes(
     &self,
     context: &LemmyContext,
@@ -219,7 +225,7 @@ pub(crate) mod tests {
   use serial_test::serial;
 
   pub(crate) async fn parse_lemmy_community(context: &LemmyContext) -> ApubCommunity {
-    let mut json: Group = file_to_json_object("assets/lemmy/objects/group.json");
+    let mut json: Group = file_to_json_object("assets/lemmy/objects/group.json").unwrap();
     // change these links so they dont fetch over the network
     json.moderators = None;
     json.outbox =
@@ -241,7 +247,8 @@ pub(crate) mod tests {
   #[actix_rt::test]
   #[serial]
   async fn test_parse_lemmy_community() {
-    let manager = create_activity_queue();
+    let client = reqwest::Client::new().into();
+    let manager = create_activity_queue(client);
     let context = init_context(manager.queue_handle().clone());
     let community = parse_lemmy_community(&context).await;
 

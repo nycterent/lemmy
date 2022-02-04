@@ -21,10 +21,10 @@ use crate::{
     collections::group_followers::GroupFollowers,
   },
 };
-use actix_web::{body::Body, web, web::Payload, HttpRequest, HttpResponse};
+use actix_web::{web, web::Payload, HttpRequest, HttpResponse};
 use lemmy_api_common::blocking;
 use lemmy_apub_lib::{object_id::ObjectId, traits::ApubObject};
-use lemmy_db_schema::source::community::Community;
+use lemmy_db_schema::{source::community::Community, traits::ApubActor};
 use lemmy_utils::LemmyError;
 use lemmy_websocket::LemmyContext;
 use serde::Deserialize;
@@ -36,10 +36,11 @@ pub(crate) struct CommunityQuery {
 }
 
 /// Return the ActivityPub json representation of a local community over HTTP.
+#[tracing::instrument(skip_all)]
 pub(crate) async fn get_apub_community_http(
   info: web::Path<CommunityQuery>,
   context: web::Data<LemmyContext>,
-) -> Result<HttpResponse<Body>, LemmyError> {
+) -> Result<HttpResponse, LemmyError> {
   let community: ApubCommunity = blocking(context.pool(), move |conn| {
     Community::read_from_name(conn, &info.community_name)
   })
@@ -56,6 +57,7 @@ pub(crate) async fn get_apub_community_http(
 }
 
 /// Handler for all incoming receive to community inboxes.
+#[tracing::instrument(skip_all)]
 pub async fn community_inbox(
   request: HttpRequest,
   payload: Payload,
@@ -96,7 +98,7 @@ pub(in crate::http) async fn receive_group_inbox(
 pub(crate) async fn get_apub_community_followers(
   info: web::Path<CommunityQuery>,
   context: web::Data<LemmyContext>,
-) -> Result<HttpResponse<Body>, LemmyError> {
+) -> Result<HttpResponse, LemmyError> {
   let community = blocking(context.pool(), move |conn| {
     Community::read_from_name(conn, &info.community_name)
   })
@@ -110,21 +112,24 @@ pub(crate) async fn get_apub_community_followers(
 pub(crate) async fn get_apub_community_outbox(
   info: web::Path<CommunityQuery>,
   context: web::Data<LemmyContext>,
-) -> Result<HttpResponse<Body>, LemmyError> {
+) -> Result<HttpResponse, LemmyError> {
   let community = blocking(context.pool(), move |conn| {
     Community::read_from_name(conn, &info.community_name)
   })
   .await??;
   let id = ObjectId::new(generate_outbox_url(&community.actor_id)?);
   let outbox_data = CommunityContext(community.into(), context.get_ref().clone());
-  let outbox: ApubCommunityOutbox = id.dereference(&outbox_data, &mut 0).await?;
+  let outbox: ApubCommunityOutbox = id
+    .dereference(&outbox_data, context.client(), &mut 0)
+    .await?;
   Ok(create_apub_response(&outbox.into_apub(&outbox_data).await?))
 }
 
+#[tracing::instrument(skip_all)]
 pub(crate) async fn get_apub_community_moderators(
   info: web::Path<CommunityQuery>,
   context: web::Data<LemmyContext>,
-) -> Result<HttpResponse<Body>, LemmyError> {
+) -> Result<HttpResponse, LemmyError> {
   let community: ApubCommunity = blocking(context.pool(), move |conn| {
     Community::read_from_name(conn, &info.community_name)
   })
@@ -132,7 +137,9 @@ pub(crate) async fn get_apub_community_moderators(
   .into();
   let id = ObjectId::new(generate_outbox_url(&community.actor_id)?);
   let outbox_data = CommunityContext(community, context.get_ref().clone());
-  let moderators: ApubCommunityModerators = id.dereference(&outbox_data, &mut 0).await?;
+  let moderators: ApubCommunityModerators = id
+    .dereference(&outbox_data, context.client(), &mut 0)
+    .await?;
   Ok(create_apub_response(
     &moderators.into_apub(&outbox_data).await?,
   ))

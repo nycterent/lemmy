@@ -3,12 +3,11 @@ use crate::{
   objects::person::ApubPerson,
   protocol::Unparsed,
 };
-use anyhow::anyhow;
 use lemmy_apub_lib::object_id::ObjectId;
 use lemmy_utils::LemmyError;
 use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
-use strum_macros::ToString;
+use strum_macros::Display;
 use url::Url;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -27,7 +26,7 @@ pub struct Vote {
   pub(crate) unparsed: Unparsed,
 }
 
-#[derive(Clone, Debug, ToString, Deserialize, Serialize)]
+#[derive(Clone, Debug, Display, Deserialize, Serialize)]
 pub enum VoteType {
   Like,
   Dislike,
@@ -40,7 +39,7 @@ impl TryFrom<i16> for VoteType {
     match value {
       1 => Ok(VoteType::Like),
       -1 => Ok(VoteType::Dislike),
-      _ => Err(anyhow!("invalid vote value").into()),
+      _ => Err(LemmyError::from_message("invalid vote value")),
     }
   }
 }

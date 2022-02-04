@@ -26,13 +26,18 @@ use lemmy_db_schema::{
 };
 use lemmy_utils::{
   request::fetch_site_data,
-  utils::{check_slurs, check_slurs_opt, clean_url_params, is_valid_post_title},
-  ApiError,
+  utils::{
+    check_slurs,
+    check_slurs_opt,
+    clean_optional_text,
+    clean_url_params,
+    is_valid_post_title,
+  },
   ConnectionId,
   LemmyError,
 };
 use lemmy_websocket::{send::send_post_ws_message, LemmyContext, UserOperationCrud};
-use tracing::warn;
+use tracing::{warn, Instrument};
 use url::Url;
 use webmention::{Webmention, WebmentionError};
 
@@ -40,6 +45,7 @@ use webmention::{Webmention, WebmentionError};
 impl PerformCrud for CreatePost {
   type Response = PostResponse;
 
+  #[tracing::instrument(skip(context, websocket_id))]
   async fn perform(
     &self,
     context: &Data<LemmyContext>,
@@ -55,7 +61,7 @@ impl PerformCrud for CreatePost {
     honeypot_check(&data.honeypot)?;
 
     if !is_valid_post_title(&data.name) {
-      return Err(ApiError::err_plain("invalid_post_title").into());
+      return Err(LemmyError::from_message("invalid_post_title"));
     }
 
     check_community_ban(local_user_view.person.id, data.community_id, context.pool()).await?;
@@ -72,7 +78,7 @@ impl PerformCrud for CreatePost {
     let post_form = PostForm {
       name: data.name.trim().to_owned(),
       url: data_url.map(|u| clean_url_params(u.to_owned()).into()),
-      body: data.body.to_owned(),
+      body: clean_optional_text(&data.body),
       community_id: data.community_id,
       creator_id: local_user_view.person.id,
       nsfw: data.nsfw,
@@ -93,7 +99,7 @@ impl PerformCrud for CreatePost {
             "couldnt_create_post"
           };
 
-          return Err(ApiError::err(err_type, e).into());
+          return Err(LemmyError::from(e).with_message(err_type));
         }
       };
 
@@ -108,7 +114,8 @@ impl PerformCrud for CreatePost {
       Ok(Post::update_ap_id(conn, inserted_post_id, apub_id)?)
     })
     .await?
-    .map_err(|e| ApiError::err("couldnt_create_post", e))?;
+    .map_err(LemmyError::from)
+    .map_err(|e| e.with_message("couldnt_create_post"))?;
 
     // They like their own post by default
     let person_id = local_user_view.person.id;
@@ -121,7 +128,7 @@ impl PerformCrud for CreatePost {
 
     let like = move |conn: &'_ _| PostLike::like(conn, &like_form);
     if blocking(context.pool(), like).await?.is_err() {
-      return Err(ApiError::err_plain("couldnt_like_post").into());
+      return Err(LemmyError::from_message("couldnt_like_post"));
     }
 
     // Mark the post as read
@@ -131,7 +138,11 @@ impl PerformCrud for CreatePost {
       let mut webmention =
         Webmention::new::<Url>(updated_post.ap_id.clone().into(), url.clone().into())?;
       webmention.set_checked(true);
-      match webmention.send().await {
+      match webmention
+        .send()
+        .instrument(tracing::info_span!("Sending webmention"))
+        .await
+      {
         Ok(_) => {}
         Err(WebmentionError::NoEndpointDiscovered(_)) => {}
         Err(e) => warn!("Failed to send webmention: {}", e),

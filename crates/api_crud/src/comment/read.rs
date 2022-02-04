@@ -1,25 +1,28 @@
 use crate::PerformCrud;
 use actix_web::web::Data;
-use lemmy_api_common::{blocking, comment::*, get_local_user_view_from_jwt_opt};
-use lemmy_apub::{
-  fetcher::webfinger::webfinger_resolve,
-  objects::community::ApubCommunity,
-  EndpointType,
+use lemmy_api_common::{
+  blocking,
+  check_private_instance,
+  comment::*,
+  get_local_user_view_from_jwt_opt,
+  resolve_actor_identifier,
 };
 use lemmy_db_schema::{
   from_opt_str_to_opt_enum,
+  source::community::Community,
   traits::DeleteableOrRemoveable,
   ListingType,
   SortType,
 };
 use lemmy_db_views::comment_view::{CommentQueryBuilder, CommentView};
-use lemmy_utils::{ApiError, ConnectionId, LemmyError};
+use lemmy_utils::{ConnectionId, LemmyError};
 use lemmy_websocket::LemmyContext;
 
 #[async_trait::async_trait(?Send)]
 impl PerformCrud for GetComment {
   type Response = CommentResponse;
 
+  #[tracing::instrument(skip(context, _websocket_id))]
   async fn perform(
     &self,
     context: &Data<LemmyContext>,
@@ -27,7 +30,10 @@ impl PerformCrud for GetComment {
   ) -> Result<Self::Response, LemmyError> {
     let data = self;
     let local_user_view =
-      get_local_user_view_from_jwt_opt(&data.auth, context.pool(), context.secret()).await?;
+      get_local_user_view_from_jwt_opt(data.auth.as_ref(), context.pool(), context.secret())
+        .await?;
+
+    check_private_instance(&local_user_view, context.pool()).await?;
 
     let person_id = local_user_view.map(|u| u.person.id);
     let id = data.id;
@@ -35,7 +41,8 @@ impl PerformCrud for GetComment {
       CommentView::read(conn, id, person_id)
     })
     .await?
-    .map_err(|e| ApiError::err("couldnt_find_comment", e))?;
+    .map_err(LemmyError::from)
+    .map_err(|e| e.with_message("couldnt_find_comment"))?;
 
     Ok(Self::Response {
       comment_view,
@@ -49,6 +56,7 @@ impl PerformCrud for GetComment {
 impl PerformCrud for GetComments {
   type Response = GetCommentsResponse;
 
+  #[tracing::instrument(skip(context, _websocket_id))]
   async fn perform(
     &self,
     context: &Data<LemmyContext>,
@@ -56,7 +64,10 @@ impl PerformCrud for GetComments {
   ) -> Result<GetCommentsResponse, LemmyError> {
     let data: &GetComments = self;
     let local_user_view =
-      get_local_user_view_from_jwt_opt(&data.auth, context.pool(), context.secret()).await?;
+      get_local_user_view_from_jwt_opt(data.auth.as_ref(), context.pool(), context.secret())
+        .await?;
+
+    check_private_instance(&local_user_view, context.pool()).await?;
 
     let show_bot_accounts = local_user_view
       .as_ref()
@@ -68,9 +79,10 @@ impl PerformCrud for GetComments {
 
     let community_id = data.community_id;
     let community_actor_id = if let Some(name) = &data.community_name {
-      webfinger_resolve::<ApubCommunity>(name, EndpointType::Community, context, &mut 0)
+      resolve_actor_identifier::<Community>(name, context.pool())
         .await
         .ok()
+        .map(|c| c.actor_id)
     } else {
       None
     };
@@ -91,7 +103,8 @@ impl PerformCrud for GetComments {
         .list()
     })
     .await?
-    .map_err(|e| ApiError::err("couldnt_get_comments", e))?;
+    .map_err(LemmyError::from)
+    .map_err(|e| e.with_message("couldnt_get_comments"))?;
 
     // Blank out deleted or removed info
     for cv in comments

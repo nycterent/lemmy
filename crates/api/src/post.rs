@@ -5,7 +5,6 @@ use lemmy_api_common::{
   check_community_ban,
   check_community_deleted_or_removed,
   check_downvotes_enabled,
-  check_person_block,
   get_local_user_view_from_jwt,
   is_mod_or_admin,
   mark_post_as_read,
@@ -29,7 +28,7 @@ use lemmy_db_schema::{
   traits::{Crud, Likeable, Saveable},
 };
 use lemmy_db_views::post_view::PostView;
-use lemmy_utils::{request::fetch_site_metadata, ApiError, ConnectionId, LemmyError};
+use lemmy_utils::{request::fetch_site_metadata, ConnectionId, LemmyError};
 use lemmy_websocket::{send::send_post_ws_message, LemmyContext, UserOperation};
 use std::convert::TryInto;
 
@@ -37,6 +36,7 @@ use std::convert::TryInto;
 impl Perform for CreatePostLike {
   type Response = PostResponse;
 
+  #[tracing::instrument(skip(context, websocket_id))]
   async fn perform(
     &self,
     context: &Data<LemmyContext>,
@@ -57,8 +57,6 @@ impl Perform for CreatePostLike {
 
     check_community_ban(local_user_view.person.id, post.community_id, context.pool()).await?;
     check_community_deleted_or_removed(post.community_id, context.pool()).await?;
-
-    check_person_block(local_user_view.person.id, post.creator_id, context.pool()).await?;
 
     let like_form = PostLikeForm {
       post_id: data.post_id,
@@ -83,7 +81,8 @@ impl Perform for CreatePostLike {
       let like = move |conn: &'_ _| PostLike::like(conn, &like_form2);
       blocking(context.pool(), like)
         .await?
-        .map_err(|e| ApiError::err("couldnt_like_post", e))?;
+        .map_err(LemmyError::from)
+        .map_err(|e| e.with_message("couldnt_like_post"))?;
 
       Vote::send(
         &object,
@@ -123,6 +122,7 @@ impl Perform for CreatePostLike {
 impl Perform for MarkPostAsRead {
   type Response = PostResponse;
 
+  #[tracing::instrument(skip(context, _websocket_id))]
   async fn perform(
     &self,
     context: &Data<LemmyContext>,
@@ -158,6 +158,7 @@ impl Perform for MarkPostAsRead {
 impl Perform for LockPost {
   type Response = PostResponse;
 
+  #[tracing::instrument(skip(context, websocket_id))]
   async fn perform(
     &self,
     context: &Data<LemmyContext>,
@@ -227,6 +228,7 @@ impl Perform for LockPost {
 impl Perform for StickyPost {
   type Response = PostResponse;
 
+  #[tracing::instrument(skip(context, websocket_id))]
   async fn perform(
     &self,
     context: &Data<LemmyContext>,
@@ -300,6 +302,7 @@ impl Perform for StickyPost {
 impl Perform for SavePost {
   type Response = PostResponse;
 
+  #[tracing::instrument(skip(context, _websocket_id))]
   async fn perform(
     &self,
     context: &Data<LemmyContext>,
@@ -318,12 +321,14 @@ impl Perform for SavePost {
       let save = move |conn: &'_ _| PostSaved::save(conn, &post_saved_form);
       blocking(context.pool(), save)
         .await?
-        .map_err(|e| ApiError::err("couldnt_save_post", e))?;
+        .map_err(LemmyError::from)
+        .map_err(|e| e.with_message("couldnt_save_post"))?;
     } else {
       let unsave = move |conn: &'_ _| PostSaved::unsave(conn, &post_saved_form);
       blocking(context.pool(), unsave)
         .await?
-        .map_err(|e| ApiError::err("couldnt_save_post", e))?;
+        .map_err(LemmyError::from)
+        .map_err(|e| e.with_message("couldnt_save_post"))?;
     }
 
     let post_id = data.post_id;
@@ -344,6 +349,7 @@ impl Perform for SavePost {
 impl Perform for GetSiteMetadata {
   type Response = GetSiteMetadataResponse;
 
+  #[tracing::instrument(skip(context, _websocket_id))]
   async fn perform(
     &self,
     context: &Data<LemmyContext>,

@@ -28,6 +28,7 @@ use lemmy_utils::LemmyError;
 use lemmy_websocket::{send::send_comment_ws_message, LemmyContext, UserOperationCrud};
 
 impl CreateOrUpdateComment {
+  #[tracing::instrument(skip(comment, actor, kind, context))]
   pub async fn send(
     comment: ApubComment,
     actor: &ApubPerson,
@@ -70,7 +71,9 @@ impl CreateOrUpdateComment {
       .collect();
     let mut inboxes = vec![];
     for t in tagged_users {
-      let person = t.dereference(context, request_counter).await?;
+      let person = t
+        .dereference(context, context.client(), request_counter)
+        .await?;
       inboxes.push(person.shared_inbox_or_inbox_url());
     }
 
@@ -83,6 +86,7 @@ impl CreateOrUpdateComment {
 impl ActivityHandler for CreateOrUpdateComment {
   type DataType = LemmyContext;
 
+  #[tracing::instrument(skip_all)]
   async fn verify(
     &self,
     context: &Data<LemmyContext>,
@@ -102,6 +106,7 @@ impl ActivityHandler for CreateOrUpdateComment {
     Ok(())
   }
 
+  #[tracing::instrument(skip_all)]
   async fn receive(
     self,
     context: &Data<LemmyContext>,
@@ -131,6 +136,7 @@ impl ActivityHandler for CreateOrUpdateComment {
 
 #[async_trait::async_trait(?Send)]
 impl GetCommunity for CreateOrUpdateComment {
+  #[tracing::instrument(skip_all)]
   async fn get_community(
     &self,
     context: &LemmyContext,

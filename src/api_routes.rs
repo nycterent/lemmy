@@ -1,4 +1,4 @@
-use actix_web::{error::ErrorBadRequest, *};
+use actix_web::*;
 use lemmy_api::Perform;
 use lemmy_api_common::{comment::*, community::*, person::*, post::*, site::*, websocket::*};
 use lemmy_api_crud::PerformCrud;
@@ -19,7 +19,6 @@ pub fn config(cfg: &mut web::ServiceConfig, rate_limit: &RateLimit) {
           // Admin Actions
           .route("", web::post().to(route_post_crud::<CreateSite>))
           .route("", web::put().to(route_post_crud::<EditSite>))
-          .route("/transfer", web::post().to(route_post::<TransferSite>))
           .route("/config", web::get().to(route_get::<GetSiteConfig>))
           .route("/config", web::put().to(route_post::<SaveSiteConfig>)),
       )
@@ -181,6 +180,7 @@ pub fn config(cfg: &mut web::ServiceConfig, rate_limit: &RateLimit) {
           .route("/join", web::post().to(route_post::<UserJoin>))
           // Admin action. I don't like that it's in /user
           .route("/ban", web::post().to(route_post::<BanPerson>))
+          .route("/banned", web::get().to(route_get::<GetBannedPersons>))
           .route("/block", web::post().to(route_post::<BlockPerson>))
           // Account actions. I don't like that they're in /user maybe /accounts
           .route("/login", web::post().to(route_post::<Login>))
@@ -210,13 +210,27 @@ pub fn config(cfg: &mut web::ServiceConfig, rate_limit: &RateLimit) {
             web::put().to(route_post::<ChangePassword>),
           )
           .route("/report_count", web::get().to(route_get::<GetReportCount>))
-          .route("/unread_count", web::get().to(route_get::<GetUnreadCount>)),
+          .route("/unread_count", web::get().to(route_get::<GetUnreadCount>))
+          .route("/verify_email", web::post().to(route_post::<VerifyEmail>))
+          .route("/leave_admin", web::post().to(route_post::<LeaveAdmin>)),
       )
       // Admin Actions
       .service(
-        web::resource("/admin/add")
+        web::scope("/admin")
           .wrap(rate_limit.message())
-          .route(web::post().to(route_post::<AddAdmin>)),
+          .route("/add", web::post().to(route_post::<AddAdmin>))
+          .route(
+            "/registration_application/count",
+            web::get().to(route_get::<GetUnreadRegistrationApplicationCount>),
+          )
+          .route(
+            "/registration_application/list",
+            web::get().to(route_get::<ListRegistrationApplications>),
+          )
+          .route(
+            "/registration_application/approve",
+            web::put().to(route_post::<ApproveRegistrationApplication>),
+          ),
       ),
   );
 }
@@ -232,8 +246,7 @@ where
   let res = data
     .perform(&context, None)
     .await
-    .map(|json| HttpResponse::Ok().json(json))
-    .map_err(ErrorBadRequest)?;
+    .map(|json| HttpResponse::Ok().json(json))?;
   Ok(res)
 }
 
@@ -268,8 +281,7 @@ where
   let res = data
     .perform(&context, None)
     .await
-    .map(|json| HttpResponse::Ok().json(json))
-    .map_err(ErrorBadRequest)?;
+    .map(|json| HttpResponse::Ok().json(json))?;
   Ok(res)
 }
 

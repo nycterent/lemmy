@@ -6,7 +6,7 @@ use actix::Addr;
 use background_jobs::QueueHandle;
 use lemmy_db_schema::{source::secret::Secret, DbPool};
 use lemmy_utils::{settings::structs::Settings, LemmyError};
-use reqwest::Client;
+use reqwest_middleware::ClientWithMiddleware;
 use serde::Serialize;
 
 pub mod chat_server;
@@ -18,7 +18,7 @@ pub mod send;
 pub struct LemmyContext {
   pool: DbPool,
   chat_server: Addr<ChatServer>,
-  client: Client,
+  client: ClientWithMiddleware,
   activity_queue: QueueHandle,
   settings: Settings,
   secret: Secret,
@@ -28,7 +28,7 @@ impl LemmyContext {
   pub fn create(
     pool: DbPool,
     chat_server: Addr<ChatServer>,
-    client: Client,
+    client: ClientWithMiddleware,
     activity_queue: QueueHandle,
     settings: Settings,
     secret: Secret,
@@ -48,7 +48,7 @@ impl LemmyContext {
   pub fn chat_server(&self) -> &Addr<ChatServer> {
     &self.chat_server
   }
-  pub fn client(&self) -> &Client {
+  pub fn client(&self) -> &ClientWithMiddleware {
     &self.client
   }
   pub fn activity_queue(&self) -> &QueueHandle {
@@ -97,7 +97,7 @@ where
   Ok(serde_json::to_string(&response)?)
 }
 
-#[derive(EnumString, ToString, Debug, Clone)]
+#[derive(EnumString, Display, Debug, Clone)]
 pub enum UserOperation {
   Login,
   GetCaptcha,
@@ -117,6 +117,7 @@ pub enum UserOperation {
   ListPostReports,
   GetReportCount,
   GetUnreadCount,
+  VerifyEmail,
   FollowCommunity,
   GetReplies,
   GetPersonMentions,
@@ -125,13 +126,17 @@ pub enum UserOperation {
   BanFromCommunity,
   AddModToCommunity,
   AddAdmin,
+  GetUnreadRegistrationApplicationCount,
+  ListRegistrationApplications,
+  ApproveRegistrationApplication,
   BanPerson,
+  GetBannedPersons,
   Search,
   ResolveObject,
   MarkAllAsRead,
   SaveUserSettings,
   TransferCommunity,
-  TransferSite,
+  LeaveAdmin,
   PasswordReset,
   PasswordChange,
   MarkPrivateMessageAsRead,
@@ -147,7 +152,7 @@ pub enum UserOperation {
   BlockPerson,
 }
 
-#[derive(EnumString, ToString, Debug, Clone)]
+#[derive(EnumString, Display, Debug, Clone)]
 pub enum UserOperationCrud {
   // Site
   CreateSite,

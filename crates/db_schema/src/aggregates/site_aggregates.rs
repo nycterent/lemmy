@@ -55,7 +55,6 @@ mod tests {
 
     let site_form = SiteForm {
       name: "test_site".into(),
-      creator_id: inserted_person.id,
       sidebar: None,
       description: None,
       icon: None,
@@ -65,6 +64,10 @@ mod tests {
       enable_nsfw: None,
       updated: None,
       community_creation_admin_only: Some(false),
+      require_email_verification: None,
+      require_application: None,
+      application_question: None,
+      private_instance: None,
     };
 
     Site::create(&conn, &site_form).unwrap();
@@ -129,7 +132,12 @@ mod tests {
     let community_num_deleted = Community::delete(&conn, inserted_community.id).unwrap();
     assert_eq!(1, community_num_deleted);
 
-    let after_delete = SiteAggregates::read(&conn);
-    assert!(after_delete.is_err());
+    // Site should still exist, it can without a site creator.
+    let after_delete_creator = SiteAggregates::read(&conn);
+    assert!(after_delete_creator.is_ok());
+
+    Site::delete(&conn, 1).unwrap();
+    let after_delete_site = SiteAggregates::read(&conn);
+    assert!(after_delete_site.is_err());
   }
 }

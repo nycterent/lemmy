@@ -12,7 +12,6 @@ use crate::{
   PostOrComment,
 };
 use activitystreams_kinds::{object::NoteType, public};
-use anyhow::anyhow;
 use chrono::NaiveDateTime;
 use html2md::parse_html;
 use lemmy_api_common::blocking;
@@ -65,6 +64,7 @@ impl ApubObject for ApubComment {
     None
   }
 
+  #[tracing::instrument(skip_all)]
   async fn read_from_apub_id(
     object_id: Url,
     context: &LemmyContext,
@@ -78,6 +78,7 @@ impl ApubObject for ApubComment {
     )
   }
 
+  #[tracing::instrument(skip_all)]
   async fn delete(self, context: &LemmyContext) -> Result<(), LemmyError> {
     if !self.deleted {
       blocking(context.pool(), move |conn| {
@@ -88,6 +89,7 @@ impl ApubObject for ApubComment {
     Ok(())
   }
 
+  #[tracing::instrument(skip_all)]
   async fn into_apub(self, context: &LemmyContext) -> Result<Note, LemmyError> {
     let creator_id = self.creator_id;
     let creator = blocking(context.pool(), move |conn| Person::read(conn, creator_id)).await??;
@@ -136,6 +138,7 @@ impl ApubObject for ApubComment {
     Ok(Tombstone::new(self.ap_id.clone().into()))
   }
 
+  #[tracing::instrument(skip_all)]
   async fn verify(
     note: &Note,
     expected_domain: &Url,
@@ -160,7 +163,7 @@ impl ApubObject for ApubComment {
     )
     .await?;
     if post.locked {
-      return Err(anyhow!("Post is locked").into());
+      return Err(LemmyError::from_message("Post is locked"));
     }
     Ok(())
   }
@@ -168,6 +171,7 @@ impl ApubObject for ApubComment {
   /// Converts a `Note` to `Comment`.
   ///
   /// If the parent community, post and comment(s) are not known locally, these are also fetched.
+  #[tracing::instrument(skip_all)]
   async fn from_apub(
     note: Note,
     context: &LemmyContext,
@@ -175,7 +179,7 @@ impl ApubObject for ApubComment {
   ) -> Result<ApubComment, LemmyError> {
     let creator = note
       .attributed_to
-      .dereference(context, request_counter)
+      .dereference(context, context.client(), request_counter)
       .await?;
     let (post, parent_comment_id) = note.get_parents(context, request_counter).await?;
 
@@ -223,7 +227,7 @@ pub(crate) mod tests {
   ) -> (ApubPerson, ApubCommunity, ApubPost) {
     let person = parse_lemmy_person(context).await;
     let community = parse_lemmy_community(context).await;
-    let post_json = file_to_json_object("assets/lemmy/objects/page.json");
+    let post_json = file_to_json_object("assets/lemmy/objects/page.json").unwrap();
     ApubPost::verify(&post_json, url, context, &mut 0)
       .await
       .unwrap();
@@ -242,12 +246,13 @@ pub(crate) mod tests {
   #[actix_rt::test]
   #[serial]
   pub(crate) async fn test_parse_lemmy_comment() {
-    let manager = create_activity_queue();
+    let client = reqwest::Client::new().into();
+    let manager = create_activity_queue(client);
     let context = init_context(manager.queue_handle().clone());
     let url = Url::parse("https://enterprise.lemmy.ml/comment/38741").unwrap();
     let data = prepare_comment_test(&url, &context).await;
 
-    let json: Note = file_to_json_object("assets/lemmy/objects/note.json");
+    let json: Note = file_to_json_object("assets/lemmy/objects/note.json").unwrap();
     let mut request_counter = 0;
     ApubComment::verify(&json, &url, &context, &mut request_counter)
       .await
@@ -272,7 +277,8 @@ pub(crate) mod tests {
   #[actix_rt::test]
   #[serial]
   async fn test_parse_pleroma_comment() {
-    let manager = create_activity_queue();
+    let client = reqwest::Client::new().into();
+    let manager = create_activity_queue(client);
     let context = init_context(manager.queue_handle().clone());
     let url = Url::parse("https://enterprise.lemmy.ml/comment/38741").unwrap();
     let data = prepare_comment_test(&url, &context).await;
@@ -280,14 +286,14 @@ pub(crate) mod tests {
     let pleroma_url =
       Url::parse("https://queer.hacktivis.me/objects/8d4973f4-53de-49cd-8c27-df160e16a9c2")
         .unwrap();
-    let person_json = file_to_json_object("assets/pleroma/objects/person.json");
+    let person_json = file_to_json_object("assets/pleroma/objects/person.json").unwrap();
     ApubPerson::verify(&person_json, &pleroma_url, &context, &mut 0)
       .await
       .unwrap();
     ApubPerson::from_apub(person_json, &context, &mut 0)
       .await
       .unwrap();
-    let json = file_to_json_object("assets/pleroma/objects/note.json");
+    let json = file_to_json_object("assets/pleroma/objects/note.json").unwrap();
     let mut request_counter = 0;
     ApubComment::verify(&json, &pleroma_url, &context, &mut request_counter)
       .await

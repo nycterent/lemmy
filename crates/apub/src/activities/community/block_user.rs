@@ -12,6 +12,7 @@ use crate::{
   protocol::activities::community::block_user::BlockUserFromCommunity,
 };
 use activitystreams_kinds::{activity::BlockType, public};
+use chrono::NaiveDateTime;
 use lemmy_api_common::blocking;
 use lemmy_apub_lib::{
   data::Data,
@@ -27,7 +28,7 @@ use lemmy_db_schema::{
   },
   traits::{Bannable, Followable},
 };
-use lemmy_utils::LemmyError;
+use lemmy_utils::{utils::convert_datetime, LemmyError};
 use lemmy_websocket::LemmyContext;
 
 impl BlockUserFromCommunity {
@@ -35,6 +36,7 @@ impl BlockUserFromCommunity {
     community: &ApubCommunity,
     target: &ApubPerson,
     actor: &ApubPerson,
+    expires: Option<NaiveDateTime>,
     context: &LemmyContext,
   ) -> Result<BlockUserFromCommunity, LemmyError> {
     Ok(BlockUserFromCommunity {
@@ -48,17 +50,20 @@ impl BlockUserFromCommunity {
         BlockType::Block,
         &context.settings().get_protocol_and_hostname(),
       )?,
+      expires: expires.map(convert_datetime),
       unparsed: Default::default(),
     })
   }
 
+  #[tracing::instrument(skip_all)]
   pub async fn send(
     community: &ApubCommunity,
     target: &ApubPerson,
     actor: &ApubPerson,
+    expires: Option<NaiveDateTime>,
     context: &LemmyContext,
   ) -> Result<(), LemmyError> {
-    let block = BlockUserFromCommunity::new(community, target, actor, context)?;
+    let block = BlockUserFromCommunity::new(community, target, actor, expires, context)?;
     let block_id = block.id.clone();
 
     let activity = AnnouncableActivities::BlockUserFromCommunity(block);
@@ -70,6 +75,8 @@ impl BlockUserFromCommunity {
 #[async_trait::async_trait(?Send)]
 impl ActivityHandler for BlockUserFromCommunity {
   type DataType = LemmyContext;
+
+  #[tracing::instrument(skip_all)]
   async fn verify(
     &self,
     context: &Data<LemmyContext>,
@@ -83,17 +90,22 @@ impl ActivityHandler for BlockUserFromCommunity {
     Ok(())
   }
 
+  #[tracing::instrument(skip_all)]
   async fn receive(
     self,
     context: &Data<LemmyContext>,
     request_counter: &mut i32,
   ) -> Result<(), LemmyError> {
     let community = self.get_community(context, request_counter).await?;
-    let blocked_user = self.object.dereference(context, request_counter).await?;
+    let blocked_user = self
+      .object
+      .dereference(context, context.client(), request_counter)
+      .await?;
 
     let community_user_ban_form = CommunityPersonBanForm {
       community_id: community.id,
       person_id: blocked_user.id,
+      expires: Some(self.expires.map(|u| u.naive_local())),
     };
 
     blocking(context.pool(), move |conn: &'_ _| {
@@ -119,11 +131,15 @@ impl ActivityHandler for BlockUserFromCommunity {
 
 #[async_trait::async_trait(?Send)]
 impl GetCommunity for BlockUserFromCommunity {
+  #[tracing::instrument(skip_all)]
   async fn get_community(
     &self,
     context: &LemmyContext,
     request_counter: &mut i32,
   ) -> Result<ApubCommunity, LemmyError> {
-    self.target.dereference(context, request_counter).await
+    self
+      .target
+      .dereference(context, context.client(), request_counter)
+      .await
   }
 }

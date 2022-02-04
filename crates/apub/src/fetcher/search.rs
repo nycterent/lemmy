@@ -1,10 +1,8 @@
 use crate::{
-  fetcher::webfinger::webfinger_resolve,
+  fetcher::webfinger::webfinger_resolve_actor,
   objects::{comment::ApubComment, community::ApubCommunity, person::ApubPerson, post::ApubPost},
   protocol::objects::{group::Group, note::Note, page::Page, person::Person},
-  EndpointType,
 };
-use anyhow::anyhow;
 use chrono::NaiveDateTime;
 use lemmy_apub_lib::{object_id::ObjectId, traits::ApubObject};
 use lemmy_utils::LemmyError;
@@ -19,6 +17,7 @@ use url::Url;
 /// http://lemmy_beta:8551/u/lemmy_alpha, or @lemmy_beta@lemmy_beta:8551
 /// http://lemmy_gamma:8561/post/3
 /// http://lemmy_delta:8571/comment/2
+#[tracing::instrument(skip_all)]
 pub async fn search_by_apub_id(
   query: &str,
   context: &LemmyContext,
@@ -27,41 +26,31 @@ pub async fn search_by_apub_id(
   match Url::parse(query) {
     Ok(url) => {
       ObjectId::new(url)
-        .dereference(context, request_counter)
+        .dereference(context, context.client(), request_counter)
         .await
     }
     Err(_) => {
       let (kind, identifier) = query.split_at(1);
       match kind {
         "@" => {
-          let id = webfinger_resolve::<ApubPerson>(
-            identifier,
-            EndpointType::Person,
-            context,
-            request_counter,
-          )
-          .await?;
+          let id =
+            webfinger_resolve_actor::<ApubPerson>(identifier, context, request_counter).await?;
           Ok(SearchableObjects::Person(
             ObjectId::new(id)
-              .dereference(context, request_counter)
+              .dereference(context, context.client(), request_counter)
               .await?,
           ))
         }
         "!" => {
-          let id = webfinger_resolve::<ApubCommunity>(
-            identifier,
-            EndpointType::Community,
-            context,
-            request_counter,
-          )
-          .await?;
+          let id =
+            webfinger_resolve_actor::<ApubCommunity>(identifier, context, request_counter).await?;
           Ok(SearchableObjects::Community(
             ObjectId::new(id)
-              .dereference(context, request_counter)
+              .dereference(context, context.client(), request_counter)
               .await?,
           ))
         }
-        _ => Err(anyhow!("invalid query").into()),
+        _ => Err(LemmyError::from_message("invalid query")),
       }
     }
   }
@@ -105,6 +94,7 @@ impl ApubObject for SearchableObjects {
   //       a single query.
   //       we could skip this and always return an error, but then it would always fetch objects
   //       over http, and not be able to mark objects as deleted that were deleted by remote server.
+  #[tracing::instrument(skip_all)]
   async fn read_from_apub_id(
     object_id: Url,
     context: &LemmyContext,
@@ -128,6 +118,7 @@ impl ApubObject for SearchableObjects {
     Ok(None)
   }
 
+  #[tracing::instrument(skip_all)]
   async fn delete(self, data: &Self::DataType) -> Result<(), LemmyError> {
     match self {
       SearchableObjects::Person(p) => p.delete(data).await,
@@ -145,6 +136,7 @@ impl ApubObject for SearchableObjects {
     unimplemented!()
   }
 
+  #[tracing::instrument(skip_all)]
   async fn verify(
     apub: &Self::ApubType,
     expected_domain: &Url,
@@ -167,6 +159,7 @@ impl ApubObject for SearchableObjects {
     }
   }
 
+  #[tracing::instrument(skip_all)]
   async fn from_apub(
     apub: Self::ApubType,
     context: &LemmyContext,

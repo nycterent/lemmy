@@ -1,4 +1,5 @@
 use crate::{
+  functions::lower,
   naive_now,
   newtypes::{CommunityId, DbUrl, PersonId},
   source::community::{
@@ -12,9 +13,17 @@ use crate::{
     CommunityPersonBanForm,
     CommunitySafe,
   },
-  traits::{Bannable, Crud, DeleteableOrRemoveable, Followable, Joinable},
+  traits::{ApubActor, Bannable, Crud, DeleteableOrRemoveable, Followable, Joinable},
 };
-use diesel::{dsl::*, result::Error, ExpressionMethods, PgConnection, QueryDsl, RunQueryDsl};
+use diesel::{
+  dsl::*,
+  result::Error,
+  ExpressionMethods,
+  PgConnection,
+  QueryDsl,
+  RunQueryDsl,
+  TextExpressionMethods,
+};
 use url::Url;
 
 mod safe_type {
@@ -91,14 +100,6 @@ impl Crud for Community {
 }
 
 impl Community {
-  pub fn read_from_name(conn: &PgConnection, community_name: &str) -> Result<Community, Error> {
-    use crate::schema::community::dsl::*;
-    community
-      .filter(local.eq(true))
-      .filter(name.eq(community_name))
-      .first::<Self>(conn)
-  }
-
   pub fn update_deleted(
     conn: &PgConnection,
     community_id: CommunityId,
@@ -134,17 +135,6 @@ impl Community {
       .do_update()
       .set(community_form)
       .get_result::<Self>(conn)
-  }
-  pub fn read_from_apub_id(conn: &PgConnection, object_id: Url) -> Result<Option<Self>, Error> {
-    use crate::schema::community::dsl::*;
-    let object_id: DbUrl = object_id.into();
-    Ok(
-      community
-        .filter(actor_id.eq(object_id))
-        .first::<Community>(conn)
-        .ok()
-        .map(Into::into),
-    )
   }
 }
 
@@ -224,6 +214,9 @@ impl Bannable for CommunityPersonBan {
     use crate::schema::community_person_ban::dsl::*;
     insert_into(community_person_ban)
       .values(community_person_ban_form)
+      .on_conflict((community_id, person_id))
+      .do_update()
+      .set(community_person_ban_form)
       .get_result::<Self>(conn)
   }
 
@@ -292,6 +285,40 @@ impl Followable for CommunityFollower {
       community_follower.filter(community_id.eq(community_id_)),
     ))
     .get_result(conn)
+  }
+}
+
+impl ApubActor for Community {
+  fn read_from_apub_id(conn: &PgConnection, object_id: Url) -> Result<Option<Self>, Error> {
+    use crate::schema::community::dsl::*;
+    let object_id: DbUrl = object_id.into();
+    Ok(
+      community
+        .filter(actor_id.eq(object_id))
+        .first::<Community>(conn)
+        .ok()
+        .map(Into::into),
+    )
+  }
+
+  fn read_from_name(conn: &PgConnection, community_name: &str) -> Result<Community, Error> {
+    use crate::schema::community::dsl::*;
+    community
+      .filter(local.eq(true))
+      .filter(lower(name).eq(lower(community_name)))
+      .first::<Self>(conn)
+  }
+
+  fn read_from_name_and_domain(
+    conn: &PgConnection,
+    community_name: &str,
+    protocol_domain: &str,
+  ) -> Result<Community, Error> {
+    use crate::schema::community::dsl::*;
+    community
+      .filter(lower(name).eq(lower(community_name)))
+      .filter(actor_id.like(format!("{}%", protocol_domain)))
+      .first::<Self>(conn)
   }
 }
 
@@ -382,6 +409,7 @@ mod tests {
     let community_person_ban_form = CommunityPersonBanForm {
       community_id: inserted_community.id,
       person_id: inserted_person.id,
+      expires: None,
     };
 
     let inserted_community_person_ban =
@@ -392,6 +420,7 @@ mod tests {
       community_id: inserted_community.id,
       person_id: inserted_person.id,
       published: inserted_community_person_ban.published,
+      expires: None,
     };
 
     let read_community = Community::read(&conn, inserted_community.id).unwrap();

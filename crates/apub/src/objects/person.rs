@@ -22,6 +22,7 @@ use lemmy_apub_lib::{
 use lemmy_db_schema::{
   naive_now,
   source::person::{Person as DbPerson, PersonForm},
+  traits::ApubActor,
 };
 use lemmy_utils::{
   utils::{check_slurs, check_slurs_opt, convert_datetime, markdown_to_html},
@@ -57,6 +58,7 @@ impl ApubObject for ApubPerson {
     Some(self.last_refreshed_at)
   }
 
+  #[tracing::instrument(skip_all)]
   async fn read_from_apub_id(
     object_id: Url,
     context: &LemmyContext,
@@ -70,6 +72,7 @@ impl ApubObject for ApubPerson {
     )
   }
 
+  #[tracing::instrument(skip_all)]
   async fn delete(self, context: &LemmyContext) -> Result<(), LemmyError> {
     blocking(context.pool(), move |conn| {
       DbPerson::update_deleted(conn, self.id, true)
@@ -78,6 +81,7 @@ impl ApubObject for ApubPerson {
     Ok(())
   }
 
+  #[tracing::instrument(skip_all)]
   async fn into_apub(self, _pool: &LemmyContext) -> Result<Person, LemmyError> {
     let kind = if self.bot_account {
       UserTypes::Service
@@ -103,9 +107,9 @@ impl ApubObject for ApubPerson {
       matrix_user_id: self.matrix_user_id.clone(),
       published: Some(convert_datetime(self.published)),
       outbox: generate_outbox_url(&self.actor_id)?.into(),
-      endpoints: Endpoints {
-        shared_inbox: self.shared_inbox_url.clone().map(|s| s.into()),
-      },
+      endpoints: self.shared_inbox_url.clone().map(|s| Endpoints {
+        shared_inbox: s.into(),
+      }),
       public_key: self.get_public_key()?,
       updated: self.updated.map(convert_datetime),
       unparsed: Default::default(),
@@ -118,6 +122,7 @@ impl ApubObject for ApubPerson {
     unimplemented!()
   }
 
+  #[tracing::instrument(skip_all)]
   async fn verify(
     person: &Person,
     expected_domain: &Url,
@@ -135,6 +140,7 @@ impl ApubObject for ApubPerson {
     Ok(())
   }
 
+  #[tracing::instrument(skip_all)]
   async fn from_apub(
     person: Person,
     context: &LemmyContext,
@@ -144,6 +150,7 @@ impl ApubObject for ApubPerson {
       name: person.preferred_username,
       display_name: Some(person.name),
       banned: None,
+      ban_expires: None,
       deleted: None,
       avatar: Some(person.icon.map(|i| i.url.into())),
       banner: Some(person.image.map(|i| i.url.into())),
@@ -161,7 +168,7 @@ impl ApubObject for ApubPerson {
       public_key: person.public_key.public_key_pem,
       last_refreshed_at: Some(naive_now()),
       inbox_url: Some(person.inbox.into()),
-      shared_inbox_url: Some(person.endpoints.shared_inbox.map(|s| s.into())),
+      shared_inbox_url: Some(person.endpoints.map(|e| e.shared_inbox.into())),
       matrix_user_id: Some(person.matrix_user_id),
     };
     let person = blocking(context.pool(), move |conn| {
@@ -203,7 +210,7 @@ pub(crate) mod tests {
   use serial_test::serial;
 
   pub(crate) async fn parse_lemmy_person(context: &LemmyContext) -> ApubPerson {
-    let json = file_to_json_object("assets/lemmy/objects/person.json");
+    let json = file_to_json_object("assets/lemmy/objects/person.json").unwrap();
     let url = Url::parse("https://enterprise.lemmy.ml/u/picard").unwrap();
     let mut request_counter = 0;
     ApubPerson::verify(&json, &url, context, &mut request_counter)
@@ -219,7 +226,8 @@ pub(crate) mod tests {
   #[actix_rt::test]
   #[serial]
   async fn test_parse_lemmy_person() {
-    let manager = create_activity_queue();
+    let client = reqwest::Client::new().into();
+    let manager = create_activity_queue(client);
     let context = init_context(manager.queue_handle().clone());
     let person = parse_lemmy_person(&context).await;
 
@@ -233,9 +241,10 @@ pub(crate) mod tests {
   #[actix_rt::test]
   #[serial]
   async fn test_parse_pleroma_person() {
-    let manager = create_activity_queue();
+    let client = reqwest::Client::new().into();
+    let manager = create_activity_queue(client);
     let context = init_context(manager.queue_handle().clone());
-    let json = file_to_json_object("assets/pleroma/objects/person.json");
+    let json = file_to_json_object("assets/pleroma/objects/person.json").unwrap();
     let url = Url::parse("https://queer.hacktivis.me/users/lanodan").unwrap();
     let mut request_counter = 0;
     ApubPerson::verify(&json, &url, &context, &mut request_counter)

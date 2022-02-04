@@ -11,10 +11,10 @@ use crate::{
   objects::person::ApubPerson,
   protocol::collections::person_outbox::PersonOutbox,
 };
-use actix_web::{body::Body, web, web::Payload, HttpRequest, HttpResponse};
+use actix_web::{web, web::Payload, HttpRequest, HttpResponse};
 use lemmy_api_common::blocking;
 use lemmy_apub_lib::traits::ApubObject;
-use lemmy_db_schema::source::person::Person;
+use lemmy_db_schema::{source::person::Person, traits::ApubActor};
 use lemmy_utils::LemmyError;
 use lemmy_websocket::LemmyContext;
 use serde::Deserialize;
@@ -26,14 +26,15 @@ pub struct PersonQuery {
 }
 
 /// Return the ActivityPub json representation of a local person over HTTP.
+#[tracing::instrument(skip_all)]
 pub(crate) async fn get_apub_person_http(
   info: web::Path<PersonQuery>,
   context: web::Data<LemmyContext>,
-) -> Result<HttpResponse<Body>, LemmyError> {
+) -> Result<HttpResponse, LemmyError> {
   let user_name = info.into_inner().user_name;
   // TODO: this needs to be able to read deleted persons, so that it can send tombstones
   let person: ApubPerson = blocking(context.pool(), move |conn| {
-    Person::find_by_name(conn, &user_name)
+    Person::read_from_name(conn, &user_name)
   })
   .await??
   .into();
@@ -47,6 +48,7 @@ pub(crate) async fn get_apub_person_http(
   }
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn person_inbox(
   request: HttpRequest,
   payload: Payload,
@@ -69,12 +71,13 @@ pub(in crate::http) async fn receive_person_inbox(
   receive_activity(request, activity, activity_data, context).await
 }
 
+#[tracing::instrument(skip_all)]
 pub(crate) async fn get_apub_person_outbox(
   info: web::Path<PersonQuery>,
   context: web::Data<LemmyContext>,
-) -> Result<HttpResponse<Body>, LemmyError> {
+) -> Result<HttpResponse, LemmyError> {
   let person = blocking(context.pool(), move |conn| {
-    Person::find_by_name(conn, &info.user_name)
+    Person::read_from_name(conn, &info.user_name)
   })
   .await??;
   let outbox = PersonOutbox::new(person).await?;

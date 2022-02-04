@@ -32,6 +32,7 @@ use lemmy_utils::LemmyError;
 use lemmy_websocket::LemmyContext;
 
 impl AddMod {
+  #[tracing::instrument(skip_all)]
   pub async fn send(
     community: &ApubCommunity,
     added_mod: &ApubPerson,
@@ -63,6 +64,7 @@ impl AddMod {
 impl ActivityHandler for AddMod {
   type DataType = LemmyContext;
 
+  #[tracing::instrument(skip_all)]
   async fn verify(
     &self,
     context: &Data<LemmyContext>,
@@ -77,13 +79,17 @@ impl ActivityHandler for AddMod {
     Ok(())
   }
 
+  #[tracing::instrument(skip_all)]
   async fn receive(
     self,
     context: &Data<LemmyContext>,
     request_counter: &mut i32,
   ) -> Result<(), LemmyError> {
     let community = self.get_community(context, request_counter).await?;
-    let new_mod = self.object.dereference(context, request_counter).await?;
+    let new_mod = self
+      .object
+      .dereference(context, context.client(), request_counter)
+      .await?;
 
     // If we had to refetch the community while parsing the activity, then the new mod has already
     // been added. Skip it here as it would result in a duplicate key error.
@@ -109,6 +115,7 @@ impl ActivityHandler for AddMod {
 
 #[async_trait::async_trait(?Send)]
 impl GetCommunity for AddMod {
+  #[tracing::instrument(skip_all)]
   async fn get_community(
     &self,
     context: &LemmyContext,

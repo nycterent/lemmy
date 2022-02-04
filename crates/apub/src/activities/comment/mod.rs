@@ -11,6 +11,7 @@ use lemmy_websocket::{send::send_local_notifs, LemmyContext};
 
 pub mod create_or_update;
 
+#[tracing::instrument(skip_all)]
 async fn get_notif_recipients(
   actor: &ObjectId<ApubPerson>,
   comment: &Comment,
@@ -20,7 +21,9 @@ async fn get_notif_recipients(
 ) -> Result<Vec<LocalUserId>, LemmyError> {
   let post_id = comment.post_id;
   let post = blocking(context.pool(), move |conn| Post::read(conn, post_id)).await??;
-  let actor = actor.dereference(context, request_counter).await?;
+  let actor = actor
+    .dereference(context, context.client(), request_counter)
+    .await?;
 
   // Note:
   // Although mentions could be gotten from the post tags (they are included there), or the ccs,

@@ -2,7 +2,6 @@ use crate::protocol::{
   objects::chat_message::{ChatMessage, ChatMessageType},
   Source,
 };
-use anyhow::anyhow;
 use chrono::NaiveDateTime;
 use html2md::parse_html;
 use lemmy_api_common::blocking;
@@ -53,6 +52,7 @@ impl ApubObject for ApubPrivateMessage {
     None
   }
 
+  #[tracing::instrument(skip_all)]
   async fn read_from_apub_id(
     object_id: Url,
     context: &LemmyContext,
@@ -71,6 +71,7 @@ impl ApubObject for ApubPrivateMessage {
     unimplemented!()
   }
 
+  #[tracing::instrument(skip_all)]
   async fn into_apub(self, context: &LemmyContext) -> Result<ChatMessage, LemmyError> {
     let creator_id = self.creator_id;
     let creator = blocking(context.pool(), move |conn| Person::read(conn, creator_id)).await??;
@@ -101,6 +102,7 @@ impl ApubObject for ApubPrivateMessage {
     unimplemented!()
   }
 
+  #[tracing::instrument(skip_all)]
   async fn verify(
     note: &ChatMessage,
     expected_domain: &Url,
@@ -111,14 +113,15 @@ impl ApubObject for ApubPrivateMessage {
     verify_domains_match(note.attributed_to.inner(), note.id.inner())?;
     let person = note
       .attributed_to
-      .dereference(context, request_counter)
+      .dereference(context, context.client(), request_counter)
       .await?;
     if person.banned {
-      return Err(anyhow!("Person is banned from site").into());
+      return Err(LemmyError::from_message("Person is banned from site"));
     }
     Ok(())
   }
 
+  #[tracing::instrument(skip_all)]
   async fn from_apub(
     note: ChatMessage,
     context: &LemmyContext,
@@ -126,9 +129,11 @@ impl ApubObject for ApubPrivateMessage {
   ) -> Result<ApubPrivateMessage, LemmyError> {
     let creator = note
       .attributed_to
-      .dereference(context, request_counter)
+      .dereference(context, context.client(), request_counter)
       .await?;
-    let recipient = note.to[0].dereference(context, request_counter).await?;
+    let recipient = note.to[0]
+      .dereference(context, context.client(), request_counter)
+      .await?;
     let content = if let Some(source) = &note.source {
       source.content.clone()
     } else {
@@ -166,14 +171,14 @@ mod tests {
   use serial_test::serial;
 
   async fn prepare_comment_test(url: &Url, context: &LemmyContext) -> (ApubPerson, ApubPerson) {
-    let lemmy_person = file_to_json_object("assets/lemmy/objects/person.json");
+    let lemmy_person = file_to_json_object("assets/lemmy/objects/person.json").unwrap();
     ApubPerson::verify(&lemmy_person, url, context, &mut 0)
       .await
       .unwrap();
     let person1 = ApubPerson::from_apub(lemmy_person, context, &mut 0)
       .await
       .unwrap();
-    let pleroma_person = file_to_json_object("assets/pleroma/objects/person.json");
+    let pleroma_person = file_to_json_object("assets/pleroma/objects/person.json").unwrap();
     let pleroma_url = Url::parse("https://queer.hacktivis.me/users/lanodan").unwrap();
     ApubPerson::verify(&pleroma_person, &pleroma_url, context, &mut 0)
       .await
@@ -192,11 +197,12 @@ mod tests {
   #[actix_rt::test]
   #[serial]
   async fn test_parse_lemmy_pm() {
-    let manager = create_activity_queue();
+    let client = reqwest::Client::new().into();
+    let manager = create_activity_queue(client);
     let context = init_context(manager.queue_handle().clone());
     let url = Url::parse("https://enterprise.lemmy.ml/private_message/1621").unwrap();
     let data = prepare_comment_test(&url, &context).await;
-    let json: ChatMessage = file_to_json_object("assets/lemmy/objects/chat_message.json");
+    let json: ChatMessage = file_to_json_object("assets/lemmy/objects/chat_message.json").unwrap();
     let mut request_counter = 0;
     ApubPrivateMessage::verify(&json, &url, &context, &mut request_counter)
       .await
@@ -220,12 +226,13 @@ mod tests {
   #[actix_rt::test]
   #[serial]
   async fn test_parse_pleroma_pm() {
-    let manager = create_activity_queue();
+    let client = reqwest::Client::new().into();
+    let manager = create_activity_queue(client);
     let context = init_context(manager.queue_handle().clone());
     let url = Url::parse("https://enterprise.lemmy.ml/private_message/1621").unwrap();
     let data = prepare_comment_test(&url, &context).await;
     let pleroma_url = Url::parse("https://queer.hacktivis.me/objects/2").unwrap();
-    let json = file_to_json_object("assets/pleroma/objects/chat_message.json");
+    let json = file_to_json_object("assets/pleroma/objects/chat_message.json").unwrap();
     let mut request_counter = 0;
     ApubPrivateMessage::verify(&json, &pleroma_url, &context, &mut request_counter)
       .await

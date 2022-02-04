@@ -29,6 +29,7 @@ impl ApubObject for ApubCommunityModerators {
     None
   }
 
+  #[tracing::instrument(skip_all)]
   async fn read_from_apub_id(
     _object_id: Url,
     data: &Self::DataType,
@@ -46,10 +47,12 @@ impl ApubObject for ApubCommunityModerators {
     }
   }
 
+  #[tracing::instrument(skip_all)]
   async fn delete(self, _data: &Self::DataType) -> Result<(), LemmyError> {
     unimplemented!()
   }
 
+  #[tracing::instrument(skip_all)]
   async fn into_apub(self, data: &Self::DataType) -> Result<Self::ApubType, LemmyError> {
     let ordered_items = self
       .0
@@ -67,6 +70,7 @@ impl ApubObject for ApubCommunityModerators {
     unimplemented!()
   }
 
+  #[tracing::instrument(skip_all)]
   async fn verify(
     group_moderators: &GroupModerators,
     expected_domain: &Url,
@@ -77,6 +81,7 @@ impl ApubObject for ApubCommunityModerators {
     Ok(())
   }
 
+  #[tracing::instrument(skip_all)]
   async fn from_apub(
     apub: Self::ApubType,
     data: &Self::DataType,
@@ -105,7 +110,9 @@ impl ApubObject for ApubCommunityModerators {
     // Add new mods to database which have been added to moderators collection
     for mod_id in apub.ordered_items {
       let mod_id = ObjectId::new(mod_id);
-      let mod_user: ApubPerson = mod_id.dereference(&data.1, request_counter).await?;
+      let mod_user: ApubPerson = mod_id
+        .dereference(&data.1, data.1.client(), request_counter)
+        .await?;
 
       if !current_moderators
         .iter()
@@ -149,7 +156,8 @@ mod tests {
   #[actix_rt::test]
   #[serial]
   async fn test_parse_lemmy_community_moderators() {
-    let manager = create_activity_queue();
+    let client = reqwest::Client::new().into();
+    let manager = create_activity_queue(client);
     let context = init_context(manager.queue_handle().clone());
     let community = parse_lemmy_community(&context).await;
     let community_id = community.id;
@@ -169,7 +177,7 @@ mod tests {
     let new_mod = parse_lemmy_person(&context).await;
 
     let json: GroupModerators =
-      file_to_json_object("assets/lemmy/collections/group_moderators.json");
+      file_to_json_object("assets/lemmy/collections/group_moderators.json").unwrap();
     let url = Url::parse("https://enterprise.lemmy.ml/c/tenforward").unwrap();
     let mut request_counter = 0;
     let community_context = CommunityContext {

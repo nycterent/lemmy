@@ -26,6 +26,7 @@ use lemmy_utils::LemmyError;
 use lemmy_websocket::{send::send_community_ws_message, LemmyContext, UserOperationCrud};
 
 impl UpdateCommunity {
+  #[tracing::instrument(skip_all)]
   pub async fn send(
     community: ApubCommunity,
     actor: &ApubPerson,
@@ -53,6 +54,8 @@ impl UpdateCommunity {
 #[async_trait::async_trait(?Send)]
 impl ActivityHandler for UpdateCommunity {
   type DataType = LemmyContext;
+
+  #[tracing::instrument(skip_all)]
   async fn verify(
     &self,
     context: &Data<LemmyContext>,
@@ -73,6 +76,7 @@ impl ActivityHandler for UpdateCommunity {
     Ok(())
   }
 
+  #[tracing::instrument(skip_all)]
   async fn receive(
     self,
     context: &Data<LemmyContext>,
@@ -110,12 +114,15 @@ impl ActivityHandler for UpdateCommunity {
 
 #[async_trait::async_trait(?Send)]
 impl GetCommunity for UpdateCommunity {
+  #[tracing::instrument(skip_all)]
   async fn get_community(
     &self,
     context: &LemmyContext,
     request_counter: &mut i32,
   ) -> Result<ApubCommunity, LemmyError> {
     let cid = ObjectId::new(self.object.id.clone());
-    cid.dereference(context, request_counter).await
+    cid
+      .dereference(context, context.client(), request_counter)
+      .await
   }
 }

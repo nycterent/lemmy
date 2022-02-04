@@ -29,13 +29,14 @@ use lemmy_utils::LemmyError;
 use lemmy_websocket::LemmyContext;
 
 impl UndoBlockUserFromCommunity {
+  #[tracing::instrument(skip_all)]
   pub async fn send(
     community: &ApubCommunity,
     target: &ApubPerson,
     actor: &ApubPerson,
     context: &LemmyContext,
   ) -> Result<(), LemmyError> {
-    let block = BlockUserFromCommunity::new(community, target, actor, context)?;
+    let block = BlockUserFromCommunity::new(community, target, actor, None, context)?;
 
     let id = generate_activity_id(
       UndoType::Undo,
@@ -60,6 +61,8 @@ impl UndoBlockUserFromCommunity {
 #[async_trait::async_trait(?Send)]
 impl ActivityHandler for UndoBlockUserFromCommunity {
   type DataType = LemmyContext;
+
+  #[tracing::instrument(skip_all)]
   async fn verify(
     &self,
     context: &Data<LemmyContext>,
@@ -74,6 +77,7 @@ impl ActivityHandler for UndoBlockUserFromCommunity {
     Ok(())
   }
 
+  #[tracing::instrument(skip_all)]
   async fn receive(
     self,
     context: &Data<LemmyContext>,
@@ -83,12 +87,13 @@ impl ActivityHandler for UndoBlockUserFromCommunity {
     let blocked_user = self
       .object
       .object
-      .dereference(context, request_counter)
+      .dereference(context, context.client(), request_counter)
       .await?;
 
     let community_user_ban_form = CommunityPersonBanForm {
       community_id: community.id,
       person_id: blocked_user.id,
+      expires: None,
     };
 
     blocking(context.pool(), move |conn: &'_ _| {
@@ -102,6 +107,7 @@ impl ActivityHandler for UndoBlockUserFromCommunity {
 
 #[async_trait::async_trait(?Send)]
 impl GetCommunity for UndoBlockUserFromCommunity {
+  #[tracing::instrument(skip_all)]
   async fn get_community(
     &self,
     context: &LemmyContext,

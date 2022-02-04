@@ -5,10 +5,12 @@ use crate::{
 };
 use lemmy_api_common::{
   blocking,
+  check_person_block,
   comment::CommentResponse,
   community::CommunityResponse,
   person::PrivateMessageResponse,
   post::PostResponse,
+  send_email_to_user,
 };
 use lemmy_db_schema::{
   newtypes::{CommentId, CommunityId, LocalUserId, PersonId, PostId, PrivateMessageId},
@@ -27,15 +29,9 @@ use lemmy_db_views::{
   private_message_view::PrivateMessageView,
 };
 use lemmy_db_views_actor::community_view::CommunityView;
-use lemmy_utils::{
-  email::send_email,
-  settings::structs::Settings,
-  utils::MentionData,
-  ConnectionId,
-  LemmyError,
-};
-use tracing::error;
+use lemmy_utils::{utils::MentionData, ConnectionId, LemmyError};
 
+#[tracing::instrument(skip_all)]
 pub async fn send_post_ws_message<OP: ToString + Send + OperationType + 'static>(
   post_id: PostId,
   op: OP,
@@ -61,6 +57,7 @@ pub async fn send_post_ws_message<OP: ToString + Send + OperationType + 'static>
 
 // TODO: in many call sites in apub crate, we are setting an empty vec for recipient_ids,
 //       we should get the actual recipient actors from somewhere
+#[tracing::instrument(skip_all)]
 pub async fn send_comment_ws_message_simple<OP: ToString + Send + OperationType + 'static>(
   comment_id: CommentId,
   op: OP,
@@ -69,6 +66,7 @@ pub async fn send_comment_ws_message_simple<OP: ToString + Send + OperationType 
   send_comment_ws_message(comment_id, op, None, None, None, vec![], context).await
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn send_comment_ws_message<OP: ToString + Send + OperationType + 'static>(
   comment_id: CommentId,
   op: OP,
@@ -107,6 +105,7 @@ pub async fn send_comment_ws_message<OP: ToString + Send + OperationType + 'stat
   Ok(res)
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn send_community_ws_message<OP: ToString + Send + OperationType + 'static>(
   community_id: CommunityId,
   op: OP,
@@ -135,6 +134,7 @@ pub async fn send_community_ws_message<OP: ToString + Send + OperationType + 'st
   Ok(res)
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn send_pm_ws_message<OP: ToString + Send + OperationType + 'static>(
   private_message_id: PrivateMessageId,
   op: OP,
@@ -173,6 +173,7 @@ pub async fn send_pm_ws_message<OP: ToString + Send + OperationType + 'static>(
   Ok(res)
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn send_local_notifs(
   mentions: Vec<MentionData>,
   comment: &Comment,
@@ -233,11 +234,18 @@ pub async fn send_local_notifs(
       let parent_comment =
         blocking(context.pool(), move |conn| Comment::read(conn, parent_id)).await?;
       if let Ok(parent_comment) = parent_comment {
+        // Get the parent commenter local_user
+        let parent_creator_id = parent_comment.creator_id;
+
+        // Only add to recipients if that person isn't blocked
+        let creator_blocked = check_person_block(person.id, parent_creator_id, context.pool())
+          .await
+          .is_err();
+
         // Don't send a notif to yourself
-        if parent_comment.creator_id != person.id {
-          // Get the parent commenter local_user
+        if parent_comment.creator_id != person.id && !creator_blocked {
           let user_view = blocking(context.pool(), move |conn| {
-            LocalUserView::read_person(conn, parent_comment.creator_id)
+            LocalUserView::read_person(conn, parent_creator_id)
           })
           .await?;
           if let Ok(parent_user_view) = user_view {
@@ -257,8 +265,14 @@ pub async fn send_local_notifs(
       }
     }
     // Its a post
+    // Don't send a notif to yourself
     None => {
-      if post.creator_id != person.id {
+      // Only add to recipients if that person isn't blocked
+      let creator_blocked = check_person_block(person.id, post.creator_id, context.pool())
+        .await
+        .is_err();
+
+      if post.creator_id != person.id && !creator_blocked {
         let creator_id = post.creator_id;
         let parent_user = blocking(context.pool(), move |conn| {
           LocalUserView::read_person(conn, creator_id)
@@ -281,40 +295,4 @@ pub async fn send_local_notifs(
     }
   };
   Ok(recipient_ids)
-}
-
-pub fn send_email_to_user(
-  local_user_view: &LocalUserView,
-  subject_text: &str,
-  body_text: &str,
-  comment_content: &str,
-  settings: &Settings,
-) {
-  if local_user_view.person.banned || !local_user_view.local_user.send_notifications_to_email {
-    return;
-  }
-
-  if let Some(user_email) = &local_user_view.local_user.email {
-    let subject = &format!(
-      "{} - {} {}",
-      subject_text, settings.hostname, local_user_view.person.name,
-    );
-    let html = &format!(
-      "<h1>{}</h1><br><div>{} - {}</div><br><a href={}/inbox>inbox</a>",
-      body_text,
-      local_user_view.person.name,
-      comment_content,
-      settings.get_protocol_and_hostname()
-    );
-    match send_email(
-      subject,
-      user_email,
-      &local_user_view.person.name,
-      html,
-      settings,
-    ) {
-      Ok(_o) => _o,
-      Err(e) => error!("{}", e),
-    };
-  }
 }

@@ -28,6 +28,7 @@ use lemmy_utils::LemmyError;
 use lemmy_websocket::LemmyContext;
 
 impl UndoVote {
+  #[tracing::instrument(skip_all)]
   pub async fn send(
     object: &PostOrComment,
     actor: &ApubPerson,
@@ -63,6 +64,8 @@ impl UndoVote {
 #[async_trait::async_trait(?Send)]
 impl ActivityHandler for UndoVote {
   type DataType = LemmyContext;
+
+  #[tracing::instrument(skip_all)]
   async fn verify(
     &self,
     context: &Data<LemmyContext>,
@@ -77,16 +80,20 @@ impl ActivityHandler for UndoVote {
     Ok(())
   }
 
+  #[tracing::instrument(skip_all)]
   async fn receive(
     self,
     context: &Data<LemmyContext>,
     request_counter: &mut i32,
   ) -> Result<(), LemmyError> {
-    let actor = self.actor.dereference(context, request_counter).await?;
+    let actor = self
+      .actor
+      .dereference(context, context.client(), request_counter)
+      .await?;
     let object = self
       .object
       .object
-      .dereference(context, request_counter)
+      .dereference(context, context.client(), request_counter)
       .await?;
     match object {
       PostOrComment::Post(p) => undo_vote_post(actor, &p, context).await,
@@ -97,6 +104,7 @@ impl ActivityHandler for UndoVote {
 
 #[async_trait::async_trait(?Send)]
 impl GetCommunity for UndoVote {
+  #[tracing::instrument(skip_all)]
   async fn get_community(
     &self,
     context: &LemmyContext,

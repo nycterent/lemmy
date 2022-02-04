@@ -7,13 +7,12 @@ use crate::{
   insert_activity,
 };
 use actix_web::{
-  body::Body,
   web,
   web::{Bytes, BytesMut, Payload},
   HttpRequest,
   HttpResponse,
 };
-use anyhow::{anyhow, Context};
+use anyhow::Context;
 use futures::StreamExt;
 use http::StatusCode;
 use lemmy_api_common::blocking;
@@ -38,6 +37,7 @@ mod person;
 mod post;
 pub mod routes;
 
+#[tracing::instrument(skip_all)]
 pub async fn shared_inbox(
   request: HttpRequest,
   payload: Payload,
@@ -75,6 +75,7 @@ pub(crate) struct ActivityCommonFields {
 }
 
 // TODO: move most of this code to library
+#[tracing::instrument(skip_all)]
 async fn receive_activity<'a, T>(
   request: HttpRequest,
   activity: T,
@@ -93,7 +94,7 @@ where
   check_is_apub_id_valid(&activity_data.actor, false, &context.settings())?;
   let request_counter = &mut 0;
   let actor = ObjectId::<UserOrCommunity>::new(activity_data.actor)
-    .dereference(context, request_counter)
+    .dereference(context, context.client(), request_counter)
     .await?;
   verify_signature(&request, &actor.public_key())?;
 
@@ -117,7 +118,7 @@ where
 
 /// Convert the data to json and turn it into an HTTP Response with the correct ActivityPub
 /// headers.
-fn create_apub_response<T>(data: &T) -> HttpResponse<Body>
+fn create_apub_response<T>(data: &T) -> HttpResponse
 where
   T: Serialize,
 {
@@ -126,13 +127,13 @@ where
     .json(WithContext::new(data))
 }
 
-fn create_json_apub_response(data: serde_json::Value) -> HttpResponse<Body> {
+fn create_json_apub_response(data: serde_json::Value) -> HttpResponse {
   HttpResponse::Ok()
     .content_type(APUB_JSON_CONTENT_TYPE)
     .json(data)
 }
 
-fn create_apub_tombstone_response<T>(data: &T) -> HttpResponse<Body>
+fn create_apub_tombstone_response<T>(data: &T) -> HttpResponse
 where
   T: Serialize,
 {
@@ -149,10 +150,11 @@ pub struct ActivityQuery {
 }
 
 /// Return the ActivityPub json representation of a local activity over HTTP.
+#[tracing::instrument(skip_all)]
 pub(crate) async fn get_activity(
   info: web::Path<ActivityQuery>,
   context: web::Data<LemmyContext>,
-) -> Result<HttpResponse<Body>, LemmyError> {
+) -> Result<HttpResponse, LemmyError> {
   let settings = context.settings();
   let activity_id = Url::parse(&format!(
     "{}/activities/{}/{}",
@@ -178,13 +180,11 @@ fn assert_activity_not_local(id: &Url, hostname: &str) -> Result<(), LemmyError>
   let activity_domain = id.domain().context(location_info!())?;
 
   if activity_domain == hostname {
-    return Err(
-      anyhow!(
-        "Error: received activity which was sent by local instance: {:?}",
-        id
-      )
-      .into(),
-    );
+    let error = LemmyError::from(anyhow::anyhow!(
+      "Error: received activity which was sent by local instance: {:?}",
+      id
+    ));
+    return Err(error.with_message("received_local_activity"));
   }
   Ok(())
 }

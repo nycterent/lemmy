@@ -2,12 +2,15 @@ use crate::{
   activities::{verify_is_public, verify_person_in_community},
   check_is_apub_id_valid,
   protocol::{
-    objects::{page::Page, tombstone::Tombstone},
+    objects::{
+      page::{Page, PageType},
+      tombstone::Tombstone,
+    },
     ImageObject,
     Source,
   },
 };
-use activitystreams_kinds::{object::PageType, public};
+use activitystreams_kinds::public;
 use chrono::NaiveDateTime;
 use lemmy_api_common::blocking;
 use lemmy_apub_lib::{
@@ -60,6 +63,7 @@ impl ApubObject for ApubPost {
     None
   }
 
+  #[tracing::instrument(skip_all)]
   async fn read_from_apub_id(
     object_id: Url,
     context: &LemmyContext,
@@ -73,6 +77,7 @@ impl ApubObject for ApubPost {
     )
   }
 
+  #[tracing::instrument(skip_all)]
   async fn delete(self, context: &LemmyContext) -> Result<(), LemmyError> {
     if !self.deleted {
       blocking(context.pool(), move |conn| {
@@ -84,6 +89,7 @@ impl ApubObject for ApubPost {
   }
 
   // Turn a Lemmy post into an ActivityPub page that can be sent out over the network.
+  #[tracing::instrument(skip_all)]
   async fn into_apub(self, context: &LemmyContext) -> Result<Page, LemmyError> {
     let creator_id = self.creator_id;
     let creator = blocking(context.pool(), move |conn| Person::read(conn, creator_id)).await??;
@@ -125,6 +131,7 @@ impl ApubObject for ApubPost {
     Ok(Tombstone::new(self.ap_id.clone().into()))
   }
 
+  #[tracing::instrument(skip_all)]
   async fn verify(
     page: &Page,
     expected_domain: &Url,
@@ -146,6 +153,7 @@ impl ApubObject for ApubPost {
     Ok(())
   }
 
+  #[tracing::instrument(skip_all)]
   async fn from_apub(
     page: Page,
     context: &LemmyContext,
@@ -153,7 +161,7 @@ impl ApubObject for ApubPost {
   ) -> Result<ApubPost, LemmyError> {
     let creator = page
       .attributed_to
-      .dereference(context, request_counter)
+      .dereference(context, context.client(), request_counter)
       .await?;
     let community = page.extract_community(context, request_counter).await?;
 
@@ -211,12 +219,13 @@ mod tests {
   #[actix_rt::test]
   #[serial]
   async fn test_parse_lemmy_post() {
-    let manager = create_activity_queue();
+    let client = reqwest::Client::new().into();
+    let manager = create_activity_queue(client);
     let context = init_context(manager.queue_handle().clone());
     let community = parse_lemmy_community(&context).await;
     let person = parse_lemmy_person(&context).await;
 
-    let json = file_to_json_object("assets/lemmy/objects/page.json");
+    let json = file_to_json_object("assets/lemmy/objects/page.json").unwrap();
     let url = Url::parse("https://enterprise.lemmy.ml/post/55143").unwrap();
     let mut request_counter = 0;
     ApubPost::verify(&json, &url, &context, &mut request_counter)

@@ -28,6 +28,7 @@ use lemmy_utils::LemmyError;
 use lemmy_websocket::{messages::SendModRoomMessage, LemmyContext, UserOperation};
 
 impl Report {
+  #[tracing::instrument(skip_all)]
   pub async fn send(
     object_id: ObjectId<PostOrComment>,
     actor: &ApubPerson,
@@ -65,24 +66,36 @@ impl Report {
 #[async_trait::async_trait(?Send)]
 impl ActivityHandler for Report {
   type DataType = LemmyContext;
+
+  #[tracing::instrument(skip_all)]
   async fn verify(
     &self,
     context: &Data<LemmyContext>,
     request_counter: &mut i32,
   ) -> Result<(), LemmyError> {
     verify_activity(&self.id, self.actor.inner(), &context.settings())?;
-    let community = self.to[0].dereference(context, request_counter).await?;
+    let community = self.to[0]
+      .dereference(context, context.client(), request_counter)
+      .await?;
     verify_person_in_community(&self.actor, &community, context, request_counter).await?;
     Ok(())
   }
 
+  #[tracing::instrument(skip_all)]
   async fn receive(
     self,
     context: &Data<LemmyContext>,
     request_counter: &mut i32,
   ) -> Result<(), LemmyError> {
-    let actor = self.actor.dereference(context, request_counter).await?;
-    match self.object.dereference(context, request_counter).await? {
+    let actor = self
+      .actor
+      .dereference(context, context.client(), request_counter)
+      .await?;
+    match self
+      .object
+      .dereference(context, context.client(), request_counter)
+      .await?
+    {
       PostOrComment::Post(post) => {
         let report_form = PostReportForm {
           creator_id: actor.id,
